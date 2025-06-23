@@ -127,31 +127,49 @@ class _MyHomePageState extends State<MyHomePage> {
     });
     
     try {
-      // Mendapatkan direktori sementara untuk menyimpan video hasil kompresi
-      // Catatan: VideoCompress akan otomatis menentukan lokasi penyimpanan
-      // Variabel ini dihapus karena tidak digunakan dan menyebabkan warning
-      // final tempDir = await getTemporaryDirectory();
-      // final targetPath = '${tempDir.path}/compressed_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      // Mendapatkan ukuran file asli dalam bytes
+      int originalSizeBytes = await _videoFile!.length();
       
-      // Kompresi video
-      final info = await VideoCompress.compressVideo(
-        _videoFile!.path,
-        quality: VideoQuality.MediumQuality,
-        deleteOrigin: false,
-        includeAudio: true,
-        frameRate: 30,
-      );
-      
-      if (info != null) {
-        // Mendapatkan ukuran file hasil kompresi
-        int compressedSize = await File(info.path!).length();
-        String compressedSizeStr = _formatBytes(compressedSize, 2);
+      // Hanya kompresi jika ukuran file lebih dari 50MB (50 * 1024 * 1024 bytes)
+      if (originalSizeBytes > 8 * 1024 * 1024) {
+        // Kompresi video dengan pengaturan yang lebih optimal
+        final info = await VideoCompress.compressVideo(
+          _videoFile!.path,
+          quality: VideoQuality.LowQuality, // Menggunakan kualitas lebih rendah untuk memastikan ukuran file lebih kecil
+          deleteOrigin: false,
+          includeAudio: true,
+          frameRate: 24, // Mengurangi frame rate untuk mengurangi ukuran file
+        );
+        
+        if (info != null) {
+          // Mendapatkan ukuran file hasil kompresi
+          int compressedSize = await File(info.path!).length();
+          String compressedSizeStr = _formatBytes(compressedSize, 2);
+          
+          setState(() {
+            _compressedInfo = info;
+            _compressedSize = compressedSizeStr;
+            _compressedPath = info.path!;
+          });
+        }
+      } else {
+        // Jika ukuran file kurang dari 50MB, gunakan file asli sebagai hasil
+        // Buat MediaInfo dari file asli
+        final info = await VideoCompress.getMediaInfo(_videoFile!.path);
+        
+        // Mendapatkan ukuran file asli
+        String originalSizeStr = _formatBytes(originalSizeBytes, 2);
         
         setState(() {
           _compressedInfo = info;
-          _compressedSize = compressedSizeStr;
-          _compressedPath = info.path!;
+          _compressedSize = originalSizeStr;
+          _compressedPath = _videoFile!.path;
         });
+        
+        // Tampilkan pesan bahwa file tidak dikompresi
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Video kurang dari 50MB, tidak perlu dikompresi')),
+        );
       }
     } catch (e) {
       print('Error compressing video: $e');
