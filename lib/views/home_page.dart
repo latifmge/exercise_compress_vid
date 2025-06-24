@@ -72,8 +72,14 @@ class _HomePageState extends State<HomePage> {
     
     if (video != null) {
       setState(() {
+        // Reset semua state ketika memilih video baru
         _originalVideo = video;
         _compressedVideo = null;
+        _compressionProgress = 0.0;
+        _compressionTimeInfo = '';
+        _isCompressing = false;
+        // Reset kualitas ke default
+        _selectedQuality = VideoQuality.LowQuality;
       });
     }
   }
@@ -113,11 +119,24 @@ class _HomePageState extends State<HomePage> {
       _compressionProgress = 0.0;
     });
     
-    // Tampilkan pesan jika video tidak dikompresi karena tidak memenuhi kriteria
-    if (_compressedVideo != null && 
-        _originalVideo!.path == _compressedVideo!.path) {
+    // Tampilkan pesan sukses jika video berhasil dikompres
+    if (_compressedVideo != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video tidak dikompresi karena ukuran kurang dari 10MB atau durasi kurang dari 1 menit')),
+        const SnackBar(content: Text('Video berhasil dikompres!')),
+      );
+    }
+  }
+
+  void _cancelCompression() {
+    _controller.cancelCompression();
+    setState(() {
+      _isCompressing = false;
+      _compressionProgress = 0.0;
+    });
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Kompresi dibatalkan')),
       );
     }
   }
@@ -152,6 +171,7 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 12),
               VideoPlayerWidget(
+                key: ValueKey(_originalVideo!.path), // Unique key based on video path
                 videoFile: _originalVideo!.videoFile!,
                 videoSize: _originalVideo!.size,
                 videoPath: _originalVideo!.path,
@@ -187,29 +207,48 @@ class _HomePageState extends State<HomePage> {
                 },
               ),
               const SizedBox(height: 16),
-              ElevatedButton.icon(
-                onPressed: _isCompressing ? null : _compressVideo,
-                icon: const Icon(Icons.compress),
-                label: _isCompressing 
-                  ? Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            value: _compressionProgress / 100,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text('Mengkompresi... ${_compressionProgress.toStringAsFixed(0)}%'),
-                      ],
-                    )
-                  : const Text('Kompres Video'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _isCompressing ? null : _compressVideo,
+                      icon: const Icon(Icons.compress),
+                      label: _isCompressing 
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  value: _compressionProgress / 100,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text('Mengkompresi... ${_compressionProgress.toStringAsFixed(0)}%'),
+                            ],
+                          )
+                        : const Text('Kompres Video'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                      ),
+                    ),
+                  ),
+                  if (_isCompressing) ...[
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _cancelCompression,
+                      icon: const Icon(Icons.cancel),
+                      label: const Text('Batal'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 32),
             ],
@@ -220,6 +259,7 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 12),
               VideoPlayerWidget(
+                key: ValueKey(_compressedVideo!.path), // Unique key based on video path
                 videoFile: _compressedVideo!.videoFile!,
                 videoSize: _compressedVideo!.size,
                 videoPath: _compressedVideo!.path,

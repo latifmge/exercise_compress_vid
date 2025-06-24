@@ -38,6 +38,20 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
   }
 
   @override
+  void didUpdateWidget(VideoPlayerWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Jika video file berubah, reinitialize player
+    if (widget.videoFile.path != oldWidget.videoFile.path) {
+      _controller.dispose();
+      setState(() {
+        _isInitialized = false;
+        _isPlaying = false;
+      });
+      _initializeVideoPlayer();
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
