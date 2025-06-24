@@ -7,9 +7,13 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/video_model.dart';
 
 class VideoController {
-  // Ukuran minimum untuk kompresi (8MB)
-  static const int MIN_COMPRESSION_SIZE = 8 * 1024 * 1024;
-  
+  // Ukuran minimum untuk kompresi (10MB)
+  static const int MIN_COMPRESSION_SIZE = 10 * 1024 * 1024;
+  // Durasi minimum untuk kompresi (1 menit = 60 detik)
+  static const int MIN_COMPRESSION_DURATION = 60;
+  // Minimum rasio kompresi (5% reduction minimal)
+  static const double MIN_COMPRESSION_RATIO = 0.05;
+
   // Fungsi untuk meminta izin
   Future<bool> requestPermissions(BuildContext context) async {
     Map<Permission, PermissionStatus> statuses = await [
@@ -17,71 +21,142 @@ class VideoController {
       Permission.storage,
       Permission.photos,
     ].request();
-    
+
     // Periksa apakah ada izin yang ditolak
-    if (statuses[Permission.camera]!.isDenied || 
+    if (statuses[Permission.camera]!.isDenied ||
         statuses[Permission.storage]!.isDenied ||
         statuses[Permission.photos]!.isDenied) {
       return false;
     }
-    
+
     return true;
   }
-  
+
   // Fungsi untuk memilih video dari galeri
   Future<VideoModel?> pickVideo() async {
     final ImagePicker picker = ImagePicker();
-    final XFile? pickedFile = await picker.pickVideo(source: ImageSource.gallery);
-    
+    final XFile? pickedFile =
+        await picker.pickVideo(source: ImageSource.gallery);
+
     if (pickedFile != null) {
       File videoFile = File(pickedFile.path);
-      
+
       // Mendapatkan ukuran file asli
       int fileSize = await videoFile.length();
       String fileSizeStr = formatBytes(fileSize, 2);
-      
+
       return VideoModel(
         videoFile: videoFile,
         size: fileSizeStr,
         path: videoFile.path,
       );
     }
-    
+
     return null;
   }
-  
+
   // Fungsi untuk mengkompresi video
-  Future<VideoModel?> compressVideo(VideoModel originalVideo, Function(String) onError, {Function(double)? onProgress}) async {
+  Future<VideoModel?> compressVideo(
+      VideoModel originalVideo, Function(String) onError,
+      {Function(double)? onProgress,
+      VideoQuality quality = VideoQuality.LowQuality,
+      Function(String)? onCompressionTime}) async {
     if (originalVideo.videoFile == null) return null;
-    
+
     // Subscribe to progress stream if callback is provided
-    var progressSubscription;
+    dynamic progressSubscription;
     if (onProgress != null) {
-      progressSubscription = VideoCompress.compressProgress$.subscribe((progress) {
+      progressSubscription =
+          VideoCompress.compressProgress$.subscribe((progress) {
         onProgress(progress);
       });
     }
+
+    // Waktu mulai kompresi
+    DateTime startTime = DateTime.now();
     
     try {
       // Mendapatkan ukuran file asli dalam bytes
       int originalSizeBytes = await originalVideo.videoFile!.length();
       
-      // Hanya kompresi jika ukuran file lebih dari batas minimum
-      if (originalSizeBytes > MIN_COMPRESSION_SIZE) {
-        // Kompresi video dengan pengaturan yang lebih optimal
+      // Mendapatkan informasi media untuk durasi video
+      final mediaInfo = await VideoCompress.getMediaInfo(originalVideo.videoFile!.path);
+      int videoDurationSeconds = mediaInfo.duration?.round() ?? 0;
+
+      // Hanya kompresi jika ukuran file lebih dari 10MB DAN durasi lebih dari 1 menit
+      if (originalSizeBytes > MIN_COMPRESSION_SIZE && videoDurationSeconds > MIN_COMPRESSION_DURATION) {
+        // Kompresi video dengan pengaturan yang dapat disesuaikan
         final info = await VideoCompress.compressVideo(
           originalVideo.videoFile!.path,
-          quality: VideoQuality.LowQuality,
+          quality: quality, // Menggunakan kualitas yang dipilih user
           deleteOrigin: false,
           includeAudio: true,
-          frameRate: 24,
+          frameRate: quality == VideoQuality.LowQuality
+              ? 15
+              : (quality == VideoQuality.MediumQuality
+                  ? 24
+                  : 30), // Frame rate disesuaikan dengan kualitas
         );
-        
+
         if (info != null) {
+          // Waktu selesai kompresi
+          DateTime finishTime = DateTime.now();
+          Duration compressionDuration = finishTime.difference(startTime);
+          
+          // Format waktu kompresi
+          String formattedDuration = _formatDuration(compressionDuration);
+          
+          // Kirim informasi waktu kompresi jika callback tersedia
+          if (onCompressionTime != null) {
+            onCompressionTime('Dimulai: ${_formatTime(startTime)}\nSelesai: ${_formatTime(finishTime)}\nDurasi: $formattedDuration');
+          }
+          
           // Mendapatkan ukuran file hasil kompresi
           int compressedSize = await File(info.path!).length();
-          String compressedSizeStr = formatBytes(compressedSize, 2);
           
+          // Validasi: pastikan file hasil kompresi lebih kecil dari file asli dan efektif
+          double compressionRatio = (originalSizeBytes - compressedSize) / originalSizeBytes;
+          
+          if (compressedSize >= originalSizeBytes || compressionRatio < MIN_COMPRESSION_RATIO) {
+            // Hapus file hasil kompresi yang tidak efektif
+            try {
+              await File(info.path!).delete();
+            } catch (e) {
+              // Ignore error jika gagal menghapus file
+            }
+            
+            // Jika masih menggunakan kualitas tinggi/medium, coba dengan kualitas lebih rendah
+            if (quality != VideoQuality.LowQuality) {
+              VideoQuality lowerQuality = quality == VideoQuality.HighestQuality 
+                  ? VideoQuality.MediumQuality 
+                  : VideoQuality.LowQuality;
+              
+              // Recursive call dengan kualitas lebih rendah
+              return await compressVideo(
+                originalVideo, 
+                onError, 
+                onProgress: onProgress, 
+                quality: lowerQuality,
+                onCompressionTime: onCompressionTime,
+              );
+            }
+            
+            // Jika sudah menggunakan kualitas terendah, gunakan file asli
+            String reason = compressedSize >= originalSizeBytes 
+                ? 'File hasil kompresi lebih besar dari file asli'
+                : 'Pengurangan ukuran kurang dari 5%';
+            onError('Kompresi tidak efektif: $reason. File asli sudah cukup optimal.');
+            
+            return VideoModel(
+              videoFile: originalVideo.videoFile,
+              mediaInfo: mediaInfo,
+              size: originalVideo.size,
+              path: originalVideo.path,
+            );
+          }
+          
+          String compressedSizeStr = formatBytes(compressedSize, 2);
+
           return VideoModel(
             videoFile: File(info.path!),
             mediaInfo: info,
@@ -92,8 +167,9 @@ class VideoController {
         return null;
       } else {
         // Jika ukuran file kurang dari batas minimum, gunakan file asli sebagai hasil
-        final info = await VideoCompress.getMediaInfo(originalVideo.videoFile!.path);
-        
+        final info =
+            await VideoCompress.getMediaInfo(originalVideo.videoFile!.path);
+
         return VideoModel(
           videoFile: originalVideo.videoFile,
           mediaInfo: info,
@@ -109,52 +185,78 @@ class VideoController {
       progressSubscription?.unsubscribe();
     }
   }
-  
+
   // Fungsi untuk memformat ukuran file
   String formatBytes(int bytes, int decimals) {
     if (bytes <= 0) return '0 B';
     const suffixes = ['B', 'KB', 'MB', 'GB', 'TB'];
     var i = (log(bytes) / log(1024)).floor();
-    return ((bytes / pow(1024, i)).toStringAsFixed(decimals)) + ' ' + suffixes[i];
+    return '${(bytes / pow(1024, i)).toStringAsFixed(decimals)} ${suffixes[i]}';
   }
-  
+
   // Fungsi untuk menghitung rasio kompresi
-  String calculateCompressionRatio(VideoModel originalVideo, VideoModel compressedVideo) {
-    if (originalVideo.videoFile == null || compressedVideo.videoFile == null) return '0';
-    
+  String calculateCompressionRatio(
+      VideoModel originalVideo, VideoModel compressedVideo) {
+    if (originalVideo.videoFile == null || compressedVideo.videoFile == null) {
+      return '0';
+    }
+
     try {
       double originalSize = double.parse(originalVideo.size.split(' ')[0]);
       String originalUnit = originalVideo.size.split(' ')[1];
-      
+
       double compressedSize = double.parse(compressedVideo.size.split(' ')[0]);
       String compressedUnit = compressedVideo.size.split(' ')[1];
-      
+
       // Konversi ke bytes jika unit berbeda
       if (originalUnit != compressedUnit) {
         originalSize = convertToBytes(originalSize, originalUnit);
         compressedSize = convertToBytes(compressedSize, compressedUnit);
       }
-      
+
       double ratio = ((originalSize - compressedSize) / originalSize) * 100;
       return ratio.toStringAsFixed(2);
     } catch (e) {
       return '0';
     }
   }
-  
+
   // Fungsi untuk mengkonversi ukuran ke bytes
   double convertToBytes(double size, String unit) {
     switch (unit) {
-      case 'KB': return size * 1024;
-      case 'MB': return size * 1024 * 1024;
-      case 'GB': return size * 1024 * 1024 * 1024;
-      case 'TB': return size * 1024 * 1024 * 1024 * 1024;
-      default: return size;
+      case 'KB':
+        return size * 1024;
+      case 'MB':
+        return size * 1024 * 1024;
+      case 'GB':
+        return size * 1024 * 1024 * 1024;
+      case 'TB':
+        return size * 1024 * 1024 * 1024 * 1024;
+      default:
+        return size;
     }
   }
-  
+
   // Fungsi untuk membatalkan kompresi
   void cancelCompression() {
     VideoCompress.cancelCompression();
+  }
+  
+  // Fungsi untuk memformat waktu
+  String _formatTime(DateTime dateTime) {
+    return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}:${dateTime.second.toString().padLeft(2, '0')}';
+  }
+  
+  // Fungsi untuk memformat durasi
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    
+    if (duration.inHours > 0) {
+      return '${twoDigits(duration.inHours)}:$twoDigitMinutes:$twoDigitSeconds';
+    } else {
+      return '$twoDigitMinutes:$twoDigitSeconds';
+    }
   }
 }

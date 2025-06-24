@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:video_compress/video_compress.dart';
 import '../controllers/video_controller.dart';
 import '../models/video_model.dart';
 import '../widgets/video_player_widget.dart';
@@ -20,6 +21,8 @@ class _HomePageState extends State<HomePage> {
   bool _isCompressing = false;
   bool _permissionsRequested = false;
   double _compressionProgress = 0.0;
+  VideoQuality _selectedQuality = VideoQuality.LowQuality;
+  String _compressionTimeInfo = '';
   
   @override
   void initState() {
@@ -81,6 +84,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _isCompressing = true;
       _compressionProgress = 0.0;
+      _compressionTimeInfo = '';
     });
     
     final compressedVideo = await _controller.compressVideo(
@@ -95,6 +99,12 @@ class _HomePageState extends State<HomePage> {
           _compressionProgress = progress;
         });
       },
+      quality: _selectedQuality,
+      onCompressionTime: (timeInfo) {
+        setState(() {
+          _compressionTimeInfo = timeInfo;
+        });
+      },
     );
     
     setState(() {
@@ -103,11 +113,11 @@ class _HomePageState extends State<HomePage> {
       _compressionProgress = 0.0;
     });
     
-    // Tampilkan pesan jika video tidak dikompresi karena ukurannya kecil
+    // Tampilkan pesan jika video tidak dikompresi karena tidak memenuhi kriteria
     if (_compressedVideo != null && 
         _originalVideo!.path == _compressedVideo!.path) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video kurang dari 8MB, tidak perlu dikompresi')),
+        const SnackBar(content: Text('Video tidak dikompresi karena ukuran kurang dari 10MB atau durasi kurang dari 1 menit')),
       );
     }
   }
@@ -146,7 +156,37 @@ class _HomePageState extends State<HomePage> {
                 videoSize: _originalVideo!.size,
                 videoPath: _originalVideo!.path,
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
+              // Pilihan kualitas kompresi
+              const Text(
+                'Kualitas Kompresi:',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 8),
+              DropdownButton<VideoQuality>(
+                value: _selectedQuality,
+                isExpanded: true,
+                items: const [
+                  DropdownMenuItem(
+                    value: VideoQuality.LowQuality,
+                    child: Text('Cepat (Kualitas Rendah) - Rekomendasi untuk video panjang'),
+                  ),
+                  DropdownMenuItem(
+                    value: VideoQuality.MediumQuality,
+                    child: Text('Sedang (Kualitas Medium)'),
+                  ),
+                  DropdownMenuItem(
+                    value: VideoQuality.HighestQuality,
+                    child: Text('Lambat (Kualitas Tinggi)'),
+                  ),
+                ],
+                onChanged: _isCompressing ? null : (VideoQuality? value) {
+                  setState(() {
+                    _selectedQuality = value ?? VideoQuality.LowQuality;
+                  });
+                },
+              ),
+              const SizedBox(height: 16),
               ElevatedButton.icon(
                 onPressed: _isCompressing ? null : _compressVideo,
                 icon: const Icon(Icons.compress),
@@ -185,10 +225,32 @@ class _HomePageState extends State<HomePage> {
                 videoPath: _compressedVideo!.path,
               ),
               const SizedBox(height: 8),
-              if (_originalVideo != null) Text(
-                'Rasio Kompresi: ${_controller.calculateCompressionRatio(_originalVideo!, _compressedVideo!)}%',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
+              if (_originalVideo != null) ...[
+                Text(
+                  'Rasio Kompresi: ${_controller.calculateCompressionRatio(_originalVideo!, _compressedVideo!)}%',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                if (_compressionTimeInfo.isNotEmpty) ...[
+                  const Text(
+                    'Informasi Waktu Kompresi:',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey[300]!),
+                    ),
+                    child: Text(
+                      _compressionTimeInfo,
+                      style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
+                    ),
+                  ),
+                ],
+              ],
             ],
           ],
         ),
